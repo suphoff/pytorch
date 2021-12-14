@@ -424,6 +424,19 @@ def lazy_compute_experiment(args, experiment, results, benchmark, lazy_benchmark
     print(f"{short_name(current_name, limit=30):<30} {current_device:<4} {args.test:<5} {experiment:<20} speedup:  {speedup:.3f} pvalue: {pvalue:.2e}")
     return (speedup, pvalue)
 
+def just_run_once(args, lazy_benchmark):
+    torch.manual_seed(1337)
+    if args.test == 'eval':
+        model, example_inputs = lazy_benchmark.get_module()
+        results.append(call_model_with(model, example_inputs))
+    elif args.test == 'train':
+        lazy_benchmark.train(niter=1)
+    ltm.mark_step()
+    ltm.wait_device_ops()
+    if current_device == 'cuda':
+        torch.cuda.synchronize()
+
+
 def check_results(name, correct_result, lazy_result, device):
     correct_result = to_device(correct_result, device)
     lazy_result = to_device(lazy_result, device)
@@ -484,6 +497,7 @@ if __name__ == "__main__" :
     parser.add_argument("--torchbench_dir", type=str, help="path to torchbenchmark repo")
     parser.add_argument("--output_dir", type=str, default=".", help="path to write output files")
     parser.add_argument("--dump_lazy_counters", action='store_true', help="dump lazy counter values after each timing run")
+    parser.add_argument("--just_run_once", action="store_true")
     parser.add_argument("--run_tracing_execute_noops", action='store_true', help="Run the tracing portion only, with noop backend, useful for running under a profiler.")
     parser.add_argument("--run_in_subprocess", "-s", type=str, help="which model run in subprocess.This will ignore filter and exclude")
     args = parser.parse_args()
@@ -521,27 +535,29 @@ if __name__ == "__main__" :
                 run_tracing_execute_noops(args.test, lazy_benchmark)
                 # when profiling, we really don't want to do anything else
                 exit(0)
-
+            if args.just_run_once:
+                just_run_once(args, lazy_benchmark)
+                exit(0)
+            
             with pick_grad(args, name):
-
-                try:
-                    if args.test == 'eval':
-                        # Correctness Check
-                        torch.manual_seed(1337)
-                        model, example_inputs = benchmark.get_module()
-                        model.eval()
-                        correct_result = call_model_with(model, example_inputs)
-                        torch.manual_seed(1337)
-                        lazy_model, lazy_inputs = lazy_benchmark.get_module()
-                        lazy_model.eval()
-                        lazy_result = call_model_with(lazy_model, lazy_inputs)
-                        if not check_results(name, correct_result, lazy_result, device):
-                            print(f"INCORRECT ({name})")
-                            continue
-                except Exception:
-                    logging.exception("unhandled error")
-                    print(f"ERROR ({name})")
-                    continue
+                # try:
+                #     if args.test == 'eval':
+                #         # Correctness Check
+                #         torch.manual_seed(1337)
+                #         model, example_inputs = benchmark.get_module()
+                #         model.eval()
+                #         correct_result = call_model_with(model, example_inputs)
+                #         torch.manual_seed(1337)
+                #         lazy_model, lazy_inputs = lazy_benchmark.get_module()
+                #         lazy_model.eval()
+                #         lazy_result = call_model_with(lazy_model, lazy_inputs)
+                #         if not check_results(name, correct_result, lazy_result, device):
+                #             print(f"INCORRECT ({name})")
+                #             continue
+                # except Exception:
+                #     logging.exception("unhandled error")
+                #     print(f"ERROR ({name})")
+                #     continue
                 lazy_overhead_experiment(args, results, benchmark, lazy_benchmark)
 
                 with fuser(args.fuser) if args.fuser != 'noopt' else optimized_execution(False):
