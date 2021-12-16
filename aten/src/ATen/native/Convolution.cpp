@@ -24,6 +24,7 @@ namespace at { namespace native {
 
 DEFINE_DISPATCH(cudnn_convolution_backward_stub);
 DEFINE_DISPATCH(cudnn_convolution_transpose_backward_stub);
+DEFINE_DISPATCH(slow_conv_transpose3d_backward_stub);
 DEFINE_DISPATCH(convolution_depthwise3x3_winograd_stub);
 REGISTER_NO_CPU_DISPATCH(cudnn_convolution_backward_stub, cudnn_convolution_backward_fn);
 REGISTER_NO_CPU_DISPATCH(cudnn_convolution_transpose_backward_stub, cudnn_convolution_transpose_backward_fn);
@@ -1457,9 +1458,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> _convolution_backward_nogroup_bac
         grad_output, input, weight, kernel_size, params.stride, params.padding, params.output_padding,
         params.dilation, output_mask);
     case ConvBackend::SlowTranspose3d:
-      return at::slow_conv_transpose3d_backward(
-        grad_output, input, weight, kernel_size, params.stride, params.padding, params.output_padding,
-        params.dilation, output_mask);
+      return slow_conv_transpose3d_backward_stub(
+        input.device().type(), grad_output, input, weight, kernel_size, params.stride, params.padding,
+        params.output_padding, params.dilation, output_mask);
     default:
       TORCH_CHECK(false, "Unsupported conv nogroup backend encountered");
   }
