@@ -217,7 +217,7 @@ void ValueGroup::init(
     AliasDb& db) {
   external_aliases_.clear();
   output_aliases_.clear();
-  // Build `input_or_constant_aliases` as we look through nodes forwardly from
+  // Build `external_aliases` as we look through nodes forwardly from
   // the graph's inputs and add aliases of the inputs being created by the
   // nodes.
   external_aliases_.insert(graph->inputs().begin(), graph->inputs().end());
@@ -230,7 +230,7 @@ void ValueGroup::init(
   }
   for (const auto* node : graph->nodes()) {
     if (node->kind() == prim::Constant) {
-      // Constants are already in `input_or_constant_aliases`.
+      // Constants are already in `external_aliases`.
       continue;
     }
     for (const auto* v : node->outputs()) {
