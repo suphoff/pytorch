@@ -143,7 +143,7 @@ struct DeviceTypePropagationPass {
     GRAPH_DEBUG("processNode");
     switch (n->kind()) {
       case prim::If:
-        // return processIf(n);
+        return processIf(n);
       case prim::Loop:
       case prim::CallMethod:
       case prim::CallFunction:
@@ -177,6 +177,69 @@ struct DeviceTypePropagationPass {
     }
   }
 
+  // Small functions to overload for both Dtype and Device
+  bool is_tensor_prop_empty(const TensorType& val) const {
+    return !val.device().has_value();
+  }
+
+  bool is_tensor_prop_same(const TensorType& val1, const TensorType& val2)
+      const {
+    // Notes that it allows for null devices to be the same
+    return val1.device() == val2.device();
+  }
+
+  bool copy_tensor_prop(Value* dst, TensorType& src_type) {
+    return setDeviceType(dst, src_type.device());
+  }
+
+  bool set_empty_prop(Value* dst) {
+    return setDeviceType(dst, c10::nullopt);
+  }
+
+  bool mergeAndApplyTensorProps(
+      const at::ArrayRef<Value*>& src1,
+      const at::ArrayRef<Value*>& src2,
+      const at::ArrayRef<Value*>& dst) {
+    bool changed = false;
+    TORCH_INTERNAL_ASSERT(src1.size() == src2.size());
+    TORCH_INTERNAL_ASSERT(src1.size() == dst.size());
+
+    for (int i = 0; i < dst.size(); i++) {
+      auto src1_type = src1[i]->type()->cast<TensorType>();
+      auto src2_type = src2[i]->type()->cast<TensorType>();
+      if (!src1_type || !src2_type) {
+        continue;
+      }
+
+      if (is_tensor_prop_empty(*src1_type) ||
+          is_tensor_prop_empty(*src2_type) ||
+          !is_tensor_prop_same(*src1_type, *src2_type)) {
+        changed |= set_empty_prop(dst[i]);
+      } else {
+        changed |= copy_tensor_prop(dst[i], *src1_type);
+      }
+    }
+    return changed;
+  }
+
+  /*
+  bool processLoop(Node* n) {
+    GRAPH_DEBUG("processLoop");
+  }
+  */
+
+  void processIf(Node* node) {
+    GRAPH_DEBUG("processIf");
+    auto blocks = node->blocks();
+    auto true_block = blocks.at(0);
+    auto false_block = blocks.at(1);
+
+    processBlock(true_block);
+    processBlock(false_block);
+
+    mergeAndApplyTensorProps(
+        true_block->outputs(), false_block->outputs(), node->outputs());
+  }
   // for efficiency
   void processAtenOps(Node* n) {
     GRAPH_DEBUG("processAtenOps");
