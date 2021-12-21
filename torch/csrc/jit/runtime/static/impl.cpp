@@ -48,7 +48,7 @@ namespace jit {
 // corner cases in graph optimizations, allowing for more aggressive
 // optimizations and better performance.
 bool isUnsupportedOp(const NodeKind& kind) {
-  return kind == aten::__is__ || kind == aten::__isnot__;
+  return kind == aten::__is__ || kind == aten::__isnot__ || kind == prim::Loop;
 }
 
 // graph must be frozen or canEnableStaticRuntime would return false
@@ -58,11 +58,6 @@ bool canEnableStaticRuntime(const std::shared_ptr<torch::jit::Graph>& graph) {
   bool can_support = true;
   bool has_blocks = false;
   for (auto* node : graph->block()->nodes()) {
-    if (node->blocks().size() > 0) {
-      has_blocks = true;
-      VLOG(1) << "Found nested sub-blocks in graph at node: "
-              << PrintNode(node);
-    }
     const auto kind = node->kind();
     if (kind == prim::Constant) {
       continue;
@@ -73,11 +68,6 @@ bool canEnableStaticRuntime(const std::shared_ptr<torch::jit::Graph>& graph) {
       can_support = false;
       LOG(WARNING) << "Found unsupported op: " << kind.toQualString();
     }
-  }
-  if (has_blocks) {
-    LOG(WARNING)
-        << "Found nested sub-block in graph. Static Runtime doesn't support nested sub-blocks.";
-    can_support = false;
   }
   return can_support;
 }
@@ -287,18 +277,12 @@ ManagedTensorRanges::ManagedTensorRanges(
   const FastSet<const Value*> graph_inputs(
       block.inputs().begin(), block.inputs().end());
 
-  auto isUntrackedValue = [&alias_db, &graph_inputs](const Value* value) {
-    return !alias_db.isMutableType(value) ||
-        graph_inputs.find(value) != graph_inputs.end();
-  };
-
   const auto num_nodes = nodes.size();
   for (const auto i : c10::irange(num_nodes)) {
     auto* node = nodes[i];
     for (auto* input : node->inputs()) {
       auto* lifetime = getLifetime(input);
       if (!lifetime) {
-        DCHECK(isUntrackedValue(input));
         continue;
       }
       DCHECK(lifetime->end <= i);
@@ -314,7 +298,6 @@ ManagedTensorRanges::ManagedTensorRanges(
   for (auto* graph_output : block.outputs()) {
     auto* lifetime = getLifetime(graph_output);
     if (!lifetime) {
-      DCHECK(isUntrackedValue(graph_output));
       continue;
     }
     lifetime->end = num_nodes;
@@ -1026,6 +1009,9 @@ void BlockRunner::verify_and_correct_memory_overlap(ProcessedNode& n) {
     } else if (planner_) {
       bool overlap_detected_with_fast_check = false;
       for (size_t i = 0; i < n.outputs().size(); i++) {
+        if (!n.Output(i).isTensor()) {
+          continue;
+        }
         at::Tensor& t = n.Output(i).toTensor();
         if (planner_->overlapWithInternalBuffer(t.data_ptr())) {
           DLOG(INFO) << "Detected alias for node: " << PrintNode(n.node());
@@ -1867,6 +1853,9 @@ void ProcessedNode::verify_and_correct_memory_overlap() {
     }
     const auto& in_t = in.toTensor();
     for (const auto j : c10::irange(num_outputs_)) {
+      if (!Output(j).isTensor()) {
+        continue;
+      }
       const auto& out_t = Output(j).toTensor();
       if (!checkNoMemoryOverlap(in_t, out_t)) {
         DLOG(INFO) << "Detected alias for node: " << PrintNode(node());
